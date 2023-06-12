@@ -40,6 +40,17 @@ class GaussianFourierProjection(nn.Module):
     x_proj = x[:, None] * self.W[None, :] * 2 * np.pi
     return torch.cat([torch.sin(x_proj), torch.cos(x_proj)], dim=-1)
 
+class GaussianFourierLinearProjection(nn.Module):
+  """Gaussian Fourier embeddings for noise levels."""
+
+  def __init__(self, embedding_size=256, scale=1.0):
+    super().__init__()
+    self.W = nn.Parameter(torch.randn(embedding_size) * scale, requires_grad=False)
+
+  def forward(self, x):
+    x_proj = x[:, None] * self.W[None, :] * 2 * np.pi
+    return torch.cat([torch.sin(x_proj), torch.cos(x_proj)], dim=-1)
+
 
 class Combine(nn.Module):
   """Combine information from skip connections."""

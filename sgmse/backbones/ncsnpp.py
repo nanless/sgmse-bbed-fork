@@ -15,6 +15,7 @@
 
 # pylint: skip-file
 
+from email.policy import default
 from .ncsnpp_utils import layers, layerspp, normalization
 import torch.nn as nn
 import functools
@@ -40,6 +41,8 @@ class NCSNpp(nn.Module):
     @staticmethod
     def add_argparse_args(parser):
         # TODO: add additional arguments of constructor, if you wish to modify them.
+        parser.add_argument("--embedding_type", type=str, default='fourier')
+        parser.add_argument("--fourier_scale", type=float, default=16)
         return parser
 
     def __init__(self,
@@ -89,7 +92,7 @@ class NCSNpp(nn.Module):
         init_scale = init_scale
         assert progressive in ['none', 'output_skip', 'residual']
         assert progressive_input in ['none', 'input_skip', 'residual']
-        assert embedding_type in ['fourier', 'positional']
+        assert embedding_type in ['fourier', 'positional', 'linear']
         combine_method = progressive_combine.lower()
         combiner = functools.partial(Combine, method=combine_method)
 
@@ -106,6 +109,13 @@ class NCSNpp(nn.Module):
             embed_dim = 2 * nf
         elif embedding_type == 'positional':
             embed_dim = nf
+        elif embedding_type == 'linear':
+            modules.append(layerspp.GaussianFourierLinearProjection(
+                embedding_size=nf, scale=fourier_scale
+            ))
+            embed_dim = 2 * nf
+
+
         else:
             raise ValueError(f'embedding type {embedding_type} unknown.')
 
@@ -265,6 +275,10 @@ class NCSNpp(nn.Module):
             used_sigmas = self.sigmas[time_cond.long()]
             temb = layers.get_timestep_embedding(timesteps, self.nf)
 
+        elif self.embedding_type == 'linear':
+            used_sigmas = time_cond
+            temb = modules[m_idx](time_cond)
+            m_idx += 1
         else:
             raise ValueError(f'embedding type {self.embedding_type} unknown.')
 
