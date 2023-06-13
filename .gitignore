@@ -1,3 +1,6 @@
 *.ckpt
 wandb/*
 *.log
+*.pyc
+lightning_logs/
+```
