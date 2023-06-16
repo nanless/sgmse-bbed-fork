@@ -238,8 +238,8 @@ class DiT(nn.Module):
         input_size=256,
         patch_size=8,
         in_channels=4,
-        hidden_size=1152,
-        depth=28,
+        hidden_size=1024,
+        depth=24,
         num_heads=16,
         mlp_ratio=4.0,
         # learn_sigma=True,
@@ -256,6 +256,7 @@ class DiT(nn.Module):
         self.out_channels = in_channels // 2
         self.patch_size = patch_size
         self.num_heads = num_heads
+        self.input_size = input_size
 
         self.x_embedder = PatchEmbed(input_size, patch_size, in_channels, hidden_size, bias=True)
         # self.t_embedder = TimestepEmbedder(hidden_size)
@@ -268,6 +269,8 @@ class DiT(nn.Module):
             DiTBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)
         ])
         self.final_layer = FinalLayer(hidden_size, patch_size, self.out_channels)
+
+        # self.output_layer = nn.Conv2d(self.out_channels, self.out_channels, 1)
         
         self.initialize_weights()
 
@@ -321,17 +324,52 @@ class DiT(nn.Module):
 
     def forward(self, x, t):
         used_sigmas = t
-        x = torch.cat((x[:,[0],:,:].real, x[:,[0],:,:].imag,
-                x[:,[1],:,:].real, x[:,[1],:,:].imag), dim=1)
-        x = self.x_embedder(x) + self.pos_embed  # (N, T, D), where T = H * W / patch_size ** 2
-        t = self.t_embedder(t)                   # (N, D)
-        c = t                                    # (N, D)
-        for block in self.blocks:
-            x = block(x, c)                      # (N, T, D)
-        x = self.final_layer(x, c)                # (N, T, patch_size ** 2 * out_channels)
-        x = self.unpatchify(x)                   # (N, out_channels, H, W)
-        x = torch.permute(x, (0, 2, 3, 1)).contiguous()
-        x = torch.view_as_complex(x)[:,None, :, :]
+        if x.shape[3] > self.input_size:
+            def pad_spec(Y):
+                T = Y.size(3)
+                if T%256 !=0:
+                    num_pad = 256-T%256
+                else:
+                    num_pad = 0
+                pad2d = torch.nn.ZeroPad2d((0, num_pad, 0,0))
+                return pad2d(Y)
+            orig_shape = x.shape[3]
+            x = pad_spec(x)
+            n_segs = x.shape[3] // self.input_size
+            t = self.t_embedder(t)                   # (N, D)
+            output = []
+            for i_seg in range(n_segs):
+                seg_start = i_seg*self.input_size
+                seg_end = (i_seg+1)*self.input_size
+                cur_x = torch.cat((x[:,[0],:,seg_start:seg_end].real, x[:,[0],:,seg_start:seg_end].imag,
+                            x[:,[1],:,seg_start:seg_end].real, x[:,[1],:,seg_start:seg_end].imag), dim=1)
+                cur_x = self.x_embedder(cur_x) + self.pos_embed  # (N, T, D), where T = H * W / patch_size ** 2
+                c = t                                    # (N, D)
+                for block in self.blocks:
+                    cur_x = block(cur_x, c)                      # (N, T, D)
+                cur_x = self.final_layer(cur_x, c)                # (N, T, patch_size ** 2 * out_channels)
+                cur_x = self.unpatchify(cur_x)                   # (N, out_channels, H, W)
+                # cur_x = cur_x / used_sigmas[:, None, None, None]
+                # cur_x = self.output_layer(cur_x)
+                cur_x = torch.permute(cur_x, (0, 2, 3, 1)).contiguous()
+                cur_x = torch.view_as_complex(cur_x)[:,None, :, :]
+                output.append(cur_x)
+            output = torch.cat(output, dim=-1)
+            x = output[...,:orig_shape]
+        else:
+            x = torch.cat((x[:,[0],:,:].real, x[:,[0],:,:].imag,
+                    x[:,[1],:,:].real, x[:,[1],:,:].imag), dim=1)
+            x = self.x_embedder(x) + self.pos_embed  # (N, T, D), where T = H * W / patch_size ** 2
+            t = self.t_embedder(t)                   # (N, D)
+            c = t                                    # (N, D)
+            for block in self.blocks:
+                x = block(x, c)                      # (N, T, D)
+            x = self.final_layer(x, c)                # (N, T, patch_size ** 2 * out_channels)
+            x = self.unpatchify(x)                   # (N, out_channels, H, W)
+            # x = x / used_sigmas[:, None, None, None]
+            # x = self.output_layer(x)
+            x = torch.permute(x, (0, 2, 3, 1)).contiguous()
+            x = torch.view_as_complex(x)[:,None, :, :]
         return x
     
 
